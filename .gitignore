@@ -1,0 +1,6 @@
+node_modules/
+.env
+events.db
+ngrok
+ngrok.zip
+*.zip

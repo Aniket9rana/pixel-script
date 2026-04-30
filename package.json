@@ -1,0 +1,20 @@
+{
+  "name": "pixel-script",
+  "version": "1.0.0",
+  "description": "Marketing event tracking system — client SDK + tracker microservice",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "tracker": "node tracker/server.js",
+    "tracker:dev": "node --watch tracker/server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
