@@ -339,14 +339,73 @@
     log("Consent granted, flushed buffer:", buf.length, "events");
   }
 
+  // ─── SMART EVENT DETECTION ──────────────────────────────────────────────────
+  var CLICK_EVENT_PATTERNS = [
+    { re: /add.to.cart|add.to.bag|add.to.basket/i,                      event: "AddToCart" },
+    { re: /place.order|confirm.order|complete.purchase|pay.now/i,        event: "Purchase" },
+    { re: /buy.now|proceed.to.checkout|go.to.checkout/i,                 event: "InitiateCheckout" },
+    { re: /add.to.wishlist|save.for.later|add.to.favorites/i,            event: "AddToWishlist" },
+    { re: /start.*(free.)?trial|try.for.free/i,                          event: "StartTrial" },
+    { re: /book.appointment|book.a.call|book.a.demo|book.now|schedule/i, event: "Schedule" },
+    { re: /donate|make.a.donation/i,                                     event: "Donate" },
+    { re: /contact.us|get.in.touch|send.message/i,                       event: "Contact" },
+    { re: /subscribe|join.newsletter|sign.up.for/i,                      event: "Subscribe" },
+    { re: /get.started|sign.up|create.account|join.now|request.demo/i,   event: "Lead" },
+  ];
+
+  var URL_EVENT_PATTERNS = [
+    { re: /\/(order-confirmation|thank.you|order-success|success)/i, event: "Purchase" },
+    { re: /\/checkout/i,                                              event: "InitiateCheckout" },
+    { re: /\/cart/i,                                                  event: "AddToCart" },
+    { re: /\/(product|products)\//i,                                  event: "ViewContent" },
+    { re: /\/search/i,                                                event: "Search" },
+  ];
+
+  var FORM_EVENT_PATTERNS = [
+    { re: /checkout|payment|order/i,          event: "Purchase" },
+    { re: /register|signup|sign.up|create/i,  event: "CompleteRegistration" },
+    { re: /contact|inquiry|message/i,         event: "Contact" },
+    { re: /lead|quote|demo|trial|newsletter/i, event: "Lead" },
+  ];
+
+  function detectClickEvent(text) {
+    if (!text) return null;
+    for (var i = 0; i < CLICK_EVENT_PATTERNS.length; i++) {
+      if (CLICK_EVENT_PATTERNS[i].re.test(text)) return CLICK_EVENT_PATTERNS[i].event;
+    }
+    return null;
+  }
+
+  function detectUrlEvent(path) {
+    for (var i = 0; i < URL_EVENT_PATTERNS.length; i++) {
+      if (URL_EVENT_PATTERNS[i].re.test(path)) return URL_EVENT_PATTERNS[i].event;
+    }
+    return null;
+  }
+
+  function detectFormEvent(form) {
+    var combined = [form.id, form.getAttribute("name"), form.getAttribute("action")].join(" ").toLowerCase();
+    for (var i = 0; i < FORM_EVENT_PATTERNS.length; i++) {
+      if (FORM_EVENT_PATTERNS[i].re.test(combined)) return FORM_EVENT_PATTERNS[i].event;
+    }
+    return null;
+  }
+
   // ─── PAGE VIEW ──────────────────────────────────────────────────────────────
   function trackPageView() {
-    scrollDepthsFired = {}; // reset scroll depth on new page
-    track("page_view", {
+    scrollDepthsFired = {};
+    var props = {
       title: document.title,
       screen_width: window.screen.width,
       screen_height: window.screen.height,
-    });
+    };
+    trackMetaEvent("PageView", props);
+
+    // Auto-fire URL-based Meta Standard Event on page load
+    var urlEvent = detectUrlEvent(window.location.pathname);
+    if (urlEvent && urlEvent !== "PageView") {
+      trackMetaEvent(urlEvent, { page_path: window.location.pathname });
+    }
   }
 
   // SPA route change — patch history API
@@ -410,11 +469,14 @@
       }
 
       if (trackAttr) {
-        // Standard events → fbq("track", ...), custom events → fbq("trackCustom", ...)
-        // trackMetaEvent handles both via fireFbq internally
         trackMetaEvent(trackAttr, props);
       } else {
-        track("click", props);
+        var detectedEvent = detectClickEvent(text);
+        if (detectedEvent) {
+          trackMetaEvent(detectedEvent, props);
+        } else {
+          track("click", props);
+        }
       }
     }, true);
   }
@@ -440,8 +502,7 @@
         fields:      fields,
       };
 
-      // data-track-form="Lead" (or any Meta Standard Event) fires that event too
-      var metaFormEvent = form.dataset ? form.dataset.trackForm : null;
+      var metaFormEvent = (form.dataset && form.dataset.trackForm) || detectFormEvent(form);
       if (metaFormEvent && META_STANDARD_EVENTS[metaFormEvent]) {
         trackMetaEvent(metaFormEvent, formProps);
       } else {
