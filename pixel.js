@@ -121,26 +121,40 @@
   }
 
   // ─── ATTRIBUTION CAPTURE ────────────────────────────────────────────────────
-  // All UTM params + every major ad-network click ID
-  var ATTRIBUTION_KEYS = [
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "fbclid",   // Meta / Facebook
-    "gclid",    // Google Ads
-    "ttclid",   // TikTok
-    "msclkid",  // Microsoft / Bing
-    "twclid",   // Twitter / X
-    "li_fat_id",// LinkedIn
-    "igshid",   // Instagram
-    "ScCid",    // Snapchat
-  ];
+  // Capture all utm* params, clid/click_id params, and common ad click IDs
+  // that do not use a "clid" suffix.
+  var EXTRA_ATTRIBUTION_KEYS = {
+    dclid: true,
+    gbraid: true,
+    igshid: true,
+    li_fat_id: true,
+    mc_cid: true,
+    mc_eid: true,
+    sccid: true,
+    wbraid: true,
+    yclid: true,
+  };
+
+  function normalizeAttributionKey(key) {
+    return String(key || "").toLowerCase();
+  }
+
+  function isAttributionKey(key) {
+    var normalized = normalizeAttributionKey(key);
+    return normalized.indexOf("utm") === 0 ||
+      normalized.indexOf("clid") !== -1 ||
+      normalized.indexOf("click_id") !== -1 ||
+      !!EXTRA_ATTRIBUTION_KEYS[normalized];
+  }
 
   function captureUTMs() {
     var params = new URLSearchParams(window.location.search);
     var captured = {};
 
-    ATTRIBUTION_KEYS.forEach(function (k) {
-      var v = params.get(k);
-      if (v) captured[k] = v;
+    params.forEach(function (v, k) {
+      if (v && isAttributionKey(k)) {
+        captured[normalizeAttributionKey(k)] = v;
+      }
     });
 
     // Meta browser/click ID cookies (_fbp set by fbevents.js, _fbc from fbclid)
@@ -177,9 +191,40 @@
   }
 
   // ─── PAYLOAD BUILDER ────────────────────────────────────────────────────────
-  function buildPayload(eventName, properties) {
+  function getStoredMetaSignal(key) {
+    return getCookie(key) ||
+      (utmData.last_touch && utmData.last_touch[key]) ||
+      (utmData.first_touch && utmData.first_touch[key]) ||
+      null;
+  }
+
+  function getProvidedEventId(properties, options) {
+    if (typeof options === "string") return options;
+    if (options && (options.eventId || options.event_id)) {
+      return options.eventId || options.event_id;
+    }
+    if (properties && typeof properties === "object" && (properties.event_id || properties.eventId)) {
+      return properties.event_id || properties.eventId;
+    }
+    return uuidv4();
+  }
+
+  function cleanEventProperties(properties) {
+    var cleaned = {};
+    if (!properties || typeof properties !== "object") return cleaned;
+
+    Object.keys(properties).forEach(function (k) {
+      if (k === "event_id" || k === "eventId") return;
+      cleaned[k] = properties[k];
+    });
+    return cleaned;
+  }
+
+  function buildPayload(eventName, properties, options) {
+    var cleanProperties = cleanEventProperties(properties);
+
     return {
-      event_id:    uuidv4(),
+      event_id:    getProvidedEventId(properties, options),
       event_name:  eventName,
       site_id:     config.siteId,
       anon_id:     getAnonId(),
@@ -191,7 +236,9 @@
         first_touch: utmData.first_touch || null,
         last_touch:  utmData.last_touch  || null,
       },
-      properties:  properties || {},
+      fbp:         getStoredMetaSignal("_fbp"),
+      fbc:         getStoredMetaSignal("_fbc"),
+      properties:  cleanProperties,
       consent:     consentGranted ? "granted" : "pending",
       sdk_version: SDK_VERSION,
       timestamp:   new Date().toISOString(),
@@ -237,26 +284,45 @@
     });
   }
 
-  function track(eventName, properties) {
-    var payload = buildPayload(eventName, properties);
+  function track(eventName, properties, options) {
+    var payload = buildPayload(eventName, properties, options);
     log("Track:", eventName, properties);
     sendPayload(payload);
+    return payload;
   }
 
   // ─── OFFLINE RETRY ──────────────────────────────────────────────────────────
   function flushOfflineBuffer() {
+    var pending = [];
+    var seen = {};
+
+    function addPending(payload) {
+      if (!payload) return;
+      var key = payload.event_id || JSON.stringify(payload);
+      if (seen[key]) return;
+      seen[key] = true;
+      pending.push(payload);
+    }
+
     var stored = store.get("ps_offline_buffer");
     if (stored) {
       try {
         var events = JSON.parse(stored);
-        events.forEach(function (payload) { sendPayload(payload); });
-        store.set("ps_offline_buffer", "[]");
-        log("Flushed offline buffer:", events.length, "events");
+        if (Array.isArray(events)) {
+          events.forEach(addPending);
+        }
       } catch (e) {}
+      store.set("ps_offline_buffer", "[]");
     }
+
     if (offlineBuffer.length) {
-      offlineBuffer.forEach(function (payload) { sendPayload(payload); });
+      offlineBuffer.forEach(addPending);
       offlineBuffer = [];
+    }
+
+    if (pending.length) {
+      pending.forEach(function (payload) { sendPayload(payload); });
+      log("Flushed offline buffer:", pending.length, "events");
     }
   }
 
@@ -468,21 +534,31 @@
   };
 
   // Fire to Meta browser pixel (fbq) if the base code is on the page
-  function fireFbq(eventName, params) {
+  function fireFbq(eventName, params, eventId) {
     if (typeof window.fbq === "function") {
+      var fbqOptions = eventId ? { eventID: eventId } : undefined;
       if (META_STANDARD_EVENTS[eventName]) {
-        window.fbq("track", eventName, params || {});
+        if (fbqOptions) {
+          window.fbq("track", eventName, params || {}, fbqOptions);
+        } else {
+          window.fbq("track", eventName, params || {});
+        }
       } else {
-        window.fbq("trackCustom", eventName, params || {});
+        if (fbqOptions) {
+          window.fbq("trackCustom", eventName, params || {}, fbqOptions);
+        } else {
+          window.fbq("trackCustom", eventName, params || {});
+        }
       }
-      log("fbq fired:", eventName, params);
+      log("fbq fired:", eventName, params, fbqOptions || {});
     }
   }
 
   // Central Meta event dispatcher — sends to pixel endpoint + fbq simultaneously
-  function trackMetaEvent(eventName, properties) {
-    track(eventName, properties);
-    fireFbq(eventName, properties);
+  function trackMetaEvent(eventName, properties, options) {
+    var payload = track(eventName, properties, options);
+    fireFbq(eventName, payload.properties, payload.event_id);
+    return payload;
   }
 
   // Auto-detect ViewContent from data-track-content attribute on page elements
@@ -506,6 +582,7 @@
   // ─── PUBLIC API ─────────────────────────────────────────────────────────────
   var PixelScript = {
     init: function (userConfig) {
+      userConfig = userConfig || {};
       Object.keys(userConfig).forEach(function (k) {
         config[k] = userConfig[k];
       });
@@ -536,26 +613,28 @@
     // Meta Standard Event — goes to pixel endpoint + fbq()
     trackMetaEvent: trackMetaEvent,
 
+    createEventId: uuidv4,
+
     // Shorthand helpers for the most common conversion events
-    trackPurchase: function (props) {
+    trackPurchase: function (props, options) {
       // props: { value, currency, order_id, content_ids, contents }
-      trackMetaEvent("Purchase", props || {});
+      return trackMetaEvent("Purchase", props || {}, options);
     },
-    trackLead: function (props) {
-      trackMetaEvent("Lead", props || {});
+    trackLead: function (props, options) {
+      return trackMetaEvent("Lead", props || {}, options);
     },
-    trackAddToCart: function (props) {
+    trackAddToCart: function (props, options) {
       // props: { content_id, content_name, value, currency }
-      trackMetaEvent("AddToCart", props || {});
+      return trackMetaEvent("AddToCart", props || {}, options);
     },
-    trackInitiateCheckout: function (props) {
-      trackMetaEvent("InitiateCheckout", props || {});
+    trackInitiateCheckout: function (props, options) {
+      return trackMetaEvent("InitiateCheckout", props || {}, options);
     },
-    trackCompleteRegistration: function (props) {
-      trackMetaEvent("CompleteRegistration", props || {});
+    trackCompleteRegistration: function (props, options) {
+      return trackMetaEvent("CompleteRegistration", props || {}, options);
     },
-    trackViewContent: function (props) {
-      trackMetaEvent("ViewContent", props || {});
+    trackViewContent: function (props, options) {
+      return trackMetaEvent("ViewContent", props || {}, options);
     },
 
     // Identify a logged-in user — stitches anon_id → user_id

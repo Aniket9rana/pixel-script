@@ -17,24 +17,39 @@ CREATE TABLE IF NOT EXISTS analytics.events
     page_url        String,
     page_path       LowCardinality(String),
     referrer        Nullable(String),
+    attribution     String,                     -- raw first/last-touch JSON
 
     -- Attribution — first touch
     ft_utm_source   Nullable(LowCardinality(String)),
     ft_utm_medium   Nullable(LowCardinality(String)),
     ft_utm_campaign Nullable(String),
+    ft_utm_term     Nullable(String),
+    ft_utm_content  Nullable(String),
     ft_fbclid       Nullable(String),
     ft_gclid        Nullable(String),
     ft_ttclid       Nullable(String),
     ft_msclkid      Nullable(String),
+    ft_twclid       Nullable(String),
+    ft_dclid        Nullable(String),
+    ft_gbraid       Nullable(String),
+    ft_wbraid       Nullable(String),
+    ft_yclid        Nullable(String),
 
     -- Attribution — last touch
     lt_utm_source   Nullable(LowCardinality(String)),
     lt_utm_medium   Nullable(LowCardinality(String)),
     lt_utm_campaign Nullable(String),
+    lt_utm_term     Nullable(String),
+    lt_utm_content  Nullable(String),
     lt_fbclid       Nullable(String),
     lt_gclid        Nullable(String),
     lt_ttclid       Nullable(String),
     lt_msclkid      Nullable(String),
+    lt_twclid       Nullable(String),
+    lt_dclid        Nullable(String),
+    lt_gbraid       Nullable(String),
+    lt_wbraid       Nullable(String),
+    lt_yclid        Nullable(String),
 
     -- Meta
     fbp             Nullable(String),

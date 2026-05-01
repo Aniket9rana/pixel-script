@@ -6,6 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "test": "node test-pixel.js && node test-tracker-modules.js",
+    "test:pixel": "node test-pixel.js",
+    "test:tracker": "node test-tracker-modules.js",
     "tracker": "node tracker/server.js",
     "tracker:dev": "node --watch tracker/server.js"
   },

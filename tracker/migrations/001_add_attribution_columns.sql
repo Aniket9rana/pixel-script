@@ -1,0 +1,16 @@
+ALTER TABLE analytics.events
+  ADD COLUMN IF NOT EXISTS attribution String AFTER referrer,
+  ADD COLUMN IF NOT EXISTS ft_utm_term Nullable(String) AFTER ft_utm_campaign,
+  ADD COLUMN IF NOT EXISTS ft_utm_content Nullable(String) AFTER ft_utm_term,
+  ADD COLUMN IF NOT EXISTS ft_twclid Nullable(String) AFTER ft_msclkid,
+  ADD COLUMN IF NOT EXISTS ft_dclid Nullable(String) AFTER ft_twclid,
+  ADD COLUMN IF NOT EXISTS ft_gbraid Nullable(String) AFTER ft_dclid,
+  ADD COLUMN IF NOT EXISTS ft_wbraid Nullable(String) AFTER ft_gbraid,
+  ADD COLUMN IF NOT EXISTS ft_yclid Nullable(String) AFTER ft_wbraid,
+  ADD COLUMN IF NOT EXISTS lt_utm_term Nullable(String) AFTER lt_utm_campaign,
+  ADD COLUMN IF NOT EXISTS lt_utm_content Nullable(String) AFTER lt_utm_term,
+  ADD COLUMN IF NOT EXISTS lt_twclid Nullable(String) AFTER lt_msclkid,
+  ADD COLUMN IF NOT EXISTS lt_dclid Nullable(String) AFTER lt_twclid,
+  ADD COLUMN IF NOT EXISTS lt_gbraid Nullable(String) AFTER lt_dclid,
+  ADD COLUMN IF NOT EXISTS lt_wbraid Nullable(String) AFTER lt_gbraid,
+  ADD COLUMN IF NOT EXISTS lt_yclid Nullable(String) AFTER lt_wbraid;

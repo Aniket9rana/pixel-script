@@ -22,6 +22,17 @@ function sha256(value) {
 
 // Fields that must be hashed before forwarding to Meta CAPI
 const PII_FIELDS = ["email", "phone", "first_name", "last_name", "city", "state", "zip", "country", "date_of_birth", "gender"];
+const EXTRA_ATTRIBUTION_KEYS = new Set([
+  "dclid",
+  "gbraid",
+  "igshid",
+  "li_fat_id",
+  "mc_cid",
+  "mc_eid",
+  "sccid",
+  "wbraid",
+  "yclid",
+]);
 
 function hashPii(userData) {
   if (!userData || typeof userData !== "object") return {};
@@ -33,54 +44,94 @@ function hashPii(userData) {
   return hashed;
 }
 
+function normalizeAttributionKey(key) {
+  return String(key || "").toLowerCase();
+}
+
+function isAttributionKey(key) {
+  const normalized = normalizeAttributionKey(key);
+  return normalized.startsWith("utm") ||
+    normalized.includes("clid") ||
+    normalized.includes("click_id") ||
+    EXTRA_ATTRIBUTION_KEYS.has(normalized);
+}
+
+function captureAttributionFromQuery(query = {}) {
+  const captured = {};
+
+  for (const [key, value] of Object.entries(query)) {
+    if (!isAttributionKey(key)) continue;
+
+    const firstValue = Array.isArray(value) ? value[0] : value;
+    if (firstValue == null || firstValue === "") continue;
+
+    captured[normalizeAttributionKey(key)] = String(firstValue);
+  }
+
+  return captured;
+}
+
+function getProvidedEventId(properties = {}, options = {}) {
+  if (typeof options === "string") return options;
+  if (options && (options.eventId || options.event_id)) {
+    return options.eventId || options.event_id;
+  }
+  if (properties && typeof properties === "object" && (properties.event_id || properties.eventId)) {
+    return properties.event_id || properties.eventId;
+  }
+  return crypto.randomUUID();
+}
+
+function cleanEventProperties(properties = {}) {
+  if (!properties || typeof properties !== "object") return {};
+
+  const cleaned = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (key === "event_id" || key === "eventId") continue;
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
+
 // ─── REQUEST CONTEXT EXTRACTION ───────────────────────────────────────────────
 // Pass an Express req object — everything is pulled automatically
 function extractRequestContext(req) {
   if (!req) return {};
 
+  const headers = req.headers || {};
+  const cleanAttribution = captureAttributionFromQuery(req.query || {});
+
   // Real IP — respect proxy headers (set trust proxy in Express)
   const ip =
-    (req.headers["x-forwarded-for"] || "").split(",")[0].trim() ||
+    (headers["x-forwarded-for"] || "").split(",")[0].trim() ||
     req.socket?.remoteAddress ||
     null;
 
-  const userAgent = req.headers["user-agent"] || null;
+  const userAgent = headers["user-agent"] || null;
 
   // Meta browser cookies (set by fbevents.js on the client)
-  const cookies = req.cookies || parseCookieHeader(req.headers["cookie"] || "");
+  const cookies = req.cookies || parseCookieHeader(headers["cookie"] || "");
   const fbp = cookies["_fbp"] || null;
 
   // _fbc: prefer cookie, fall back to building from fbclid query param
   let fbc = cookies["_fbc"] || null;
-  if (!fbc && req.query?.fbclid) {
-    fbc = `fb.1.${Date.now()}.${req.query.fbclid}`;
+  if (!fbc && cleanAttribution.fbclid) {
+    fbc = `fb.1.${Date.now()}.${cleanAttribution.fbclid}`;
   }
 
-  // UTM params from query string (server-side landing page hits)
-  const q = req.query || {};
-  const attribution = {
-    utm_source:   q.utm_source   || null,
-    utm_medium:   q.utm_medium   || null,
-    utm_campaign: q.utm_campaign || null,
-    utm_term:     q.utm_term     || null,
-    utm_content:  q.utm_content  || null,
-    fbclid:       q.fbclid       || null,
-    gclid:        q.gclid        || null,
-    ttclid:       q.ttclid       || null,
-    msclkid:      q.msclkid      || null,
-  };
-
-  // Drop null attribution fields
-  const cleanAttribution = Object.fromEntries(
-    Object.entries(attribution).filter(([, v]) => v !== null)
-  );
+  const attributionEnvelope = Object.keys(cleanAttribution).length
+    ? {
+        first_touch: cleanAttribution,
+        last_touch:  cleanAttribution,
+      }
+    : null;
 
   return {
     ip,
     user_agent: userAgent,
     fbp,
     fbc,
-    attribution: Object.keys(cleanAttribution).length ? cleanAttribution : null,
+    attribution: attributionEnvelope,
   };
 }
 
@@ -106,12 +157,13 @@ function parseCookieHeader(cookieStr) {
  * @example
  * await tracker.track("Purchase", { value: 99, currency: "USD" }, req, { email: req.user.email });
  */
-async function track(eventName, properties = {}, req = null, userData = {}) {
+async function track(eventName, properties = {}, req = null, userData = {}, options = {}) {
   const reqCtx   = extractRequestContext(req);
   const hashedPii = hashPii(userData);
+  const cleanProperties = cleanEventProperties(properties);
 
   const payload = {
-    event_id:    crypto.randomUUID(),
+    event_id:    getProvidedEventId(properties, options),
     event_name:  eventName,
     site_id:     _config.siteId,
     source:      "server",
@@ -121,7 +173,7 @@ async function track(eventName, properties = {}, req = null, userData = {}) {
     fbc:         reqCtx.fbc         ?? null,
     attribution: reqCtx.attribution ?? null,
     user_data:   Object.keys(hashedPii).length ? hashedPii : null,
-    properties,
+    properties:   cleanProperties,
     timestamp:   new Date().toISOString(),
   };
 
@@ -129,14 +181,69 @@ async function track(eventName, properties = {}, req = null, userData = {}) {
     console.log("[server-events] track:", eventName, {
       ip: reqCtx.ip,
       user_data_keys: Object.keys(hashedPii),
-      properties,
+      properties: cleanProperties,
     });
   }
 
-  return post(_config.endpoint, payload);
+  const result = await post(_config.endpoint, payload);
+  return { ...result, event_id: payload.event_id, payload };
 }
 
 // ─── HTTP POST ────────────────────────────────────────────────────────────────
+// Client pixel bridge helpers for rendering the matching browser-side event.
+function buildClientPixelEvent(eventName, properties = {}, options = {}) {
+  return {
+    event_name: eventName,
+    event_id: getProvidedEventId(properties, options),
+    properties: cleanEventProperties(properties),
+  };
+}
+
+function toScriptSafeJson(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+function renderClientPixelSnippet(event) {
+  return [
+    "<script>",
+    "(function(){",
+    "if(window.PixelScript&&typeof window.PixelScript.trackMetaEvent==='function'){",
+    "window.PixelScript.trackMetaEvent(",
+    toScriptSafeJson(event.event_name),
+    ",",
+    toScriptSafeJson(event.properties),
+    ",{eventId:",
+    toScriptSafeJson(event.event_id),
+    "});",
+    "}",
+    "})();",
+    "</script>",
+  ].join("");
+}
+
+function buildClientPixelSnippet(eventName, properties = {}, options = {}) {
+  return renderClientPixelSnippet(buildClientPixelEvent(eventName, properties, options));
+}
+
+async function trackBoth(eventName, properties = {}, req = null, userData = {}, options = {}) {
+  const clientPixel = buildClientPixelEvent(eventName, properties, options);
+  const server = await track(
+    eventName,
+    clientPixel.properties,
+    req,
+    userData,
+    { ...options, eventId: clientPixel.event_id }
+  );
+
+  return {
+    event_id: clientPixel.event_id,
+    server,
+    client_pixel: clientPixel,
+    client_pixel_snippet: renderClientPixelSnippet(clientPixel),
+  };
+}
+
+// Low-level HTTP delivery to the tracker microservice.
 async function post(url, payload) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), _config.timeout);
@@ -167,5 +274,8 @@ function configure(opts = {}) {
 module.exports = {
   configure,
   track,
+  trackBoth,
+  buildClientPixelEvent,
+  buildClientPixelSnippet,
   sha256,   // exported so Task 5 microservice can reuse it
 };

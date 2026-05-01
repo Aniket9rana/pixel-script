@@ -3,9 +3,9 @@
 // Meta Conversions API — field name mapping + sender
 // Docs: https://developers.facebook.com/docs/marketing-api/conversions-api
 
-const META_CAPI_VERSION = "v19.0";
-const META_CAPI_URL = (pixelId) =>
-  `https://graph.facebook.com/${META_CAPI_VERSION}/${pixelId}/events`;
+const META_CAPI_VERSION = process.env.META_CAPI_VERSION || "v25.0";
+const META_CAPI_URL = (pixelId, apiVersion = META_CAPI_VERSION) =>
+  `https://graph.facebook.com/${apiVersion}/${pixelId}/events`;
 
 // Meta user_data field names differ from our internal names
 // Values must be arrays of hashed strings (Meta accepts multiple signals)
@@ -88,7 +88,7 @@ function buildMetaEvent(payload) {
  * Send one event to Meta Conversions API.
  * Returns { success, trace_id, status, error? }
  */
-async function sendToMeta(payload, { pixelId, accessToken, testEventCode } = {}) {
+async function sendToMeta(payload, { pixelId, accessToken, testEventCode, apiVersion } = {}) {
   if (!pixelId || !accessToken) {
     return { success: false, error: "META_PIXEL_ID or META_ACCESS_TOKEN not configured" };
   }
@@ -99,7 +99,7 @@ async function sendToMeta(payload, { pixelId, accessToken, testEventCode } = {})
     ...(testEventCode && { test_event_code: testEventCode }),
   };
 
-  const url = `${META_CAPI_URL(pixelId)}?access_token=${accessToken}`;
+  const url = `${META_CAPI_URL(pixelId, apiVersion)}?access_token=${accessToken}`;
 
   try {
     const res = await fetch(url, {
