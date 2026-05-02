@@ -557,7 +557,7 @@ test("sendBeacon false falls back to fetch keepalive", () => {
   assert.equal(harness.sent.fetches.length, 1);
   assert.equal(harness.sent.fetches[0].endpoint, "https://tracker.example/event");
   assert.equal(harness.sent.fetches[0].init.keepalive, true);
-  assert.equal(harness.sent.fetches[0].init.headers["X-SDK-Version"], "1.0.0");
+  assert.equal(harness.sent.fetches[0].init.headers["X-SDK-Version"], "1.1.0");
   assert.equal(harness.sent.fetches[0].payload.event_name, "page_view");
 });
 
@@ -624,6 +624,96 @@ test("auto-detected ViewContent sends endpoint event and Meta standard fbq", () 
     viewContent.properties,
     { eventID: viewContent.event_id },
   ]);
+});
+
+test("click on text input with a value does not capture the value as text", () => {
+  const harness = createHarness({
+    config: { endpoint: "https://tracker.example/event", siteId: "shop" },
+  });
+  harness.window.PixelScript.setConsent("granted");
+  harness.clearDeliveries();
+
+  // Input with a pre-filled phone number — simulates a user clicking a filled field
+  const input = makeElement("input", {
+    type: "tel",
+    name: "mobile",
+    value: "919548357723",
+    parentElement: harness.document.body,
+  });
+
+  harness.document.dispatchEvent({ type: "click", target: input });
+
+  assert.equal(harness.sent.beacons.length, 1);
+  assert.equal(harness.sent.beacons[0].payload.event_name, "click");
+  assert.equal(harness.sent.beacons[0].payload.properties.text, "");
+});
+
+test("submit input button captures its value label, not treated as PII", () => {
+  const harness = createHarness({
+    config: { endpoint: "https://tracker.example/event", siteId: "shop" },
+  });
+  harness.window.PixelScript.setConsent("granted");
+  harness.clearDeliveries();
+
+  const submitBtn = makeElement("input", {
+    type: "submit",
+    value: "Place Order",
+    parentElement: harness.document.body,
+  });
+
+  harness.document.dispatchEvent({ type: "click", target: submitBtn });
+
+  assert.equal(harness.sent.beacons.length, 1);
+  assert.equal(harness.sent.beacons[0].payload.event_name, "Purchase");
+  assert.equal(harness.sent.beacons[0].payload.properties.text, "Place Order");
+});
+
+test("Pay currency button is detected as Purchase", () => {
+  const harness = createHarness({
+    config: { endpoint: "https://tracker.example/event", siteId: "shop" },
+  });
+  harness.window.PixelScript.setConsent("granted");
+  harness.clearDeliveries();
+
+  const payBtn = makeElement("button", {
+    innerText: "Pay ₹10,694",
+    className: "pay-btn",
+    parentElement: harness.document.body,
+  });
+
+  harness.document.dispatchEvent({ type: "click", target: payBtn });
+
+  assert.equal(harness.sent.beacons.length, 1);
+  assert.equal(harness.sent.beacons[0].payload.event_name, "Purchase");
+  assert.equal(harness.fbqCalls.length, 1);
+  assert.equal(harness.fbqCalls[0][1], "Purchase");
+});
+
+test("rapid duplicate Meta events within 300ms are deduped to one beacon", () => {
+  const harness = createHarness({
+    config: { endpoint: "https://tracker.example/event", siteId: "shop" },
+  });
+  harness.window.PixelScript.setConsent("granted");
+  harness.clearDeliveries();
+
+  const btn1 = makeElement("button", {
+    innerText: "Add to cart",
+    className: "main-btn",
+    parentElement: harness.document.body,
+  });
+  const btn2 = makeElement("button", {
+    innerText: "Add to cart",
+    className: "fbt-btn",
+    parentElement: harness.document.body,
+  });
+
+  // Two "Add to cart" buttons fire in rapid succession (same user click)
+  harness.document.dispatchEvent({ type: "click", target: btn1 });
+  harness.document.dispatchEvent({ type: "click", target: btn2 });
+
+  assert.equal(harness.sent.beacons.length, 1);
+  assert.equal(harness.sent.beacons[0].payload.event_name, "AddToCart");
+  assert.equal(harness.fbqCalls.length, 1);
 });
 
 async function run() {

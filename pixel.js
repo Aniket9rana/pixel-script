@@ -2,7 +2,7 @@
   "use strict";
 
   // ─── VERSION ────────────────────────────────────────────────────────────────
-  var SDK_VERSION = "1.0.0";
+  var SDK_VERSION = "1.1.0";
 
   // ─── CONFIG ─────────────────────────────────────────────────────────────────
   // Defaults — overridden by window.PIXEL_CONFIG or PixelScript.init()
@@ -29,6 +29,8 @@
   var scrollDepthsFired = {};
   var utmData = {};
   var sessionTimer = null;
+  var lastMetaEventName = null;
+  var lastMetaEventTs = 0;
 
   // ─── UTILS ──────────────────────────────────────────────────────────────────
   function uuidv4() {
@@ -342,7 +344,7 @@
   // ─── SMART EVENT DETECTION ──────────────────────────────────────────────────
   var CLICK_EVENT_PATTERNS = [
     { re: /add.to.cart|add.to.bag|add.to.basket/i,                      event: "AddToCart" },
-    { re: /place.order|confirm.order|complete.purchase|pay.now/i,        event: "Purchase" },
+    { re: /place.order|confirm.order|complete.purchase|pay.now|pay\s*[₹$€£¥]|pay\s+\d/i, event: "Purchase" },
     { re: /buy.now|proceed.to.checkout|go.to.checkout/i,                 event: "InitiateCheckout" },
     { re: /add.to.wishlist|save.for.later|add.to.favorites/i,            event: "AddToWishlist" },
     { re: /start.*(free.)?trial|try.for.free/i,                          event: "StartTrial" },
@@ -399,11 +401,11 @@
       screen_width: window.screen.width,
       screen_height: window.screen.height,
     };
-    trackMetaEvent("PageView", props);
+    track("page_view", props);
 
     // Auto-fire URL-based Meta Standard Event on page load
     var urlEvent = detectUrlEvent(window.location.pathname);
-    if (urlEvent && urlEvent !== "PageView") {
+    if (urlEvent) {
       trackMetaEvent(urlEvent, { page_path: window.location.pathname });
     }
   }
@@ -449,7 +451,8 @@
       if (!el) return;
 
       var tag = (el.tagName || "").toLowerCase();
-      var text = (el.innerText || el.value || el.getAttribute("aria-label") || "").trim().slice(0, 100);
+      var isValueButton = tag === "input" && (el.type === "submit" || el.type === "button" || el.type === "reset");
+      var text = (el.innerText || (isValueButton ? el.value : "") || el.getAttribute("aria-label") || "").trim().slice(0, 100);
       var trackAttr = el.dataset ? el.dataset.track : null;
       var href = el.getAttribute ? el.getAttribute("href") : null;
 
@@ -617,7 +620,19 @@
 
   // Central Meta event dispatcher — sends to pixel endpoint + fbq simultaneously
   function trackMetaEvent(eventName, properties, options) {
-    var payload = track(eventName, properties, options);
+    // Deduplicate same event fired within 300ms — prevents double-fire when
+    // multiple buttons with identical text exist on the same page
+    var now = Date.now();
+    if (eventName === lastMetaEventName && now - lastMetaEventTs < 300) {
+      log("Deduped rapid duplicate:", eventName);
+      return;
+    }
+    lastMetaEventName = eventName;
+    lastMetaEventTs = now;
+
+    var payload = buildPayload(eventName, properties, options);
+    payload.meta_event = true;
+    sendPayload(payload);
     fireFbq(eventName, payload.properties, payload.event_id);
     return payload;
   }
