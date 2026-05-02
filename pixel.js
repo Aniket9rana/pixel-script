@@ -2,7 +2,7 @@
   "use strict";
 
   // ─── VERSION ────────────────────────────────────────────────────────────────
-  var SDK_VERSION = "1.1.0";
+  var SDK_VERSION = "1.2.0";
 
   // ─── CONFIG ─────────────────────────────────────────────────────────────────
   // Defaults — overridden by window.PIXEL_CONFIG or PixelScript.init()
@@ -341,6 +341,19 @@
     log("Consent granted, flushed buffer:", buf.length, "events");
   }
 
+  // ─── PAYMENT AMOUNT EXTRACTION ──────────────────────────────────────────────
+  var CURRENCY_SYMBOLS = { '₹': 'INR', '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY' };
+  function extractPaymentProps(text) {
+    for (var symbol in CURRENCY_SYMBOLS) {
+      var re = new RegExp('[' + symbol + ']([\\d,]+(?:\\.\\d+)?)');
+      var match = text.match(re);
+      if (match) {
+        return { value: parseFloat(match[1].replace(/,/g, '')), currency: CURRENCY_SYMBOLS[symbol] };
+      }
+    }
+    return {};
+  }
+
   // ─── SMART EVENT DETECTION ──────────────────────────────────────────────────
   var CLICK_EVENT_PATTERNS = [
     { re: /add.to.cart|add.to.bag|add.to.basket/i,                      event: "AddToCart" },
@@ -476,6 +489,10 @@
       } else {
         var detectedEvent = detectClickEvent(text);
         if (detectedEvent) {
+          if (detectedEvent === "Purchase") {
+            var payProps = extractPaymentProps(text);
+            if (payProps.value) Object.assign(props, payProps);
+          }
           trackMetaEvent(detectedEvent, props);
         } else {
           track("click", props);
@@ -623,7 +640,7 @@
     // Deduplicate same event fired within 300ms — prevents double-fire when
     // multiple buttons with identical text exist on the same page
     var now = Date.now();
-    if (eventName === lastMetaEventName && now - lastMetaEventTs < 300) {
+    if (eventName === lastMetaEventName && now - lastMetaEventTs < 1500) {
       log("Deduped rapid duplicate:", eventName);
       return;
     }
