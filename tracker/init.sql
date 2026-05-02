@@ -20,8 +20,8 @@ CREATE TABLE IF NOT EXISTS analytics.events
     attribution     String,                     -- raw first/last-touch JSON
 
     -- Attribution — first touch
-    ft_utm_source   Nullable(LowCardinality(String)),
-    ft_utm_medium   Nullable(LowCardinality(String)),
+    ft_utm_source   Nullable(String),
+    ft_utm_medium   Nullable(String),
     ft_utm_campaign Nullable(String),
     ft_utm_term     Nullable(String),
     ft_utm_content  Nullable(String),
@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS analytics.events
     ft_yclid        Nullable(String),
 
     -- Attribution — last touch
-    lt_utm_source   Nullable(LowCardinality(String)),
-    lt_utm_medium   Nullable(LowCardinality(String)),
+    lt_utm_source   Nullable(String),
+    lt_utm_medium   Nullable(String),
     lt_utm_campaign Nullable(String),
     lt_utm_term     Nullable(String),
     lt_utm_content  Nullable(String),
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS analytics.events
 
     -- Payload
     properties      String,                     -- JSON blob
-    sdk_version     Nullable(LowCardinality(String)),
+    sdk_version     Nullable(String),
 
     -- Timestamps
     received_at     DateTime64(3, 'UTC')
