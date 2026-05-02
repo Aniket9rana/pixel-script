@@ -2,7 +2,7 @@
   "use strict";
 
   // ─── VERSION ────────────────────────────────────────────────────────────────
-  var SDK_VERSION = "1.2.0";
+  var SDK_VERSION = "1.3.0";
 
   // ─── CONFIG ─────────────────────────────────────────────────────────────────
   // Defaults — overridden by window.PIXEL_CONFIG or PixelScript.init()
@@ -356,7 +356,7 @@
 
   // ─── SMART EVENT DETECTION ──────────────────────────────────────────────────
   var CLICK_EVENT_PATTERNS = [
-    { re: /add.to.cart|add.to.bag|add.to.basket/i,                      event: "AddToCart" },
+    { re: /add.to.cart|add.to.bag|add.to.basket|go.to.bag|go.to.cart/i,  event: "AddToCart" },
     { re: /place.order|confirm.order|complete.purchase|pay.now|pay\s*[₹$€£¥]|pay\s+\d/i, event: "Purchase" },
     { re: /buy.now|proceed.to.checkout|go.to.checkout/i,                 event: "InitiateCheckout" },
     { re: /add.to.wishlist|save.for.later|add.to.favorites/i,            event: "AddToWishlist" },
@@ -443,11 +443,13 @@
     while (node && node !== document.body) {
       if (node.tagName) {
         var tag = node.tagName.toLowerCase();
-        if (tag === "a" || tag === "button" || node.dataset.track) return node;
+        if (tag === "a" || tag === "button" || tag === "input" || node.dataset.track) return node;
       }
       node = node.parentElement;
     }
-    return el;
+    // Only return the fallback element if it's actually interactive
+    var t = el && (el.tagName || "").toLowerCase();
+    return (t === "a" || t === "button" || t === "input") ? el : null;
   }
 
   function isOutbound(el) {
@@ -465,7 +467,9 @@
 
       var tag = (el.tagName || "").toLowerCase();
       var isValueButton = tag === "input" && (el.type === "submit" || el.type === "button" || el.type === "reset");
-      var text = (el.innerText || (isValueButton ? el.value : "") || el.getAttribute("aria-label") || "").trim().slice(0, 100);
+      var rawText = (el.innerText || (isValueButton ? el.value : "") || el.getAttribute("aria-label") || "").trim().slice(0, 100);
+      // Suppress text that looks like a phone number — avoids storing PII as click label
+      var text = /^\+?[\d\s\-().]{7,}$/.test(rawText) ? "" : rawText;
       var trackAttr = el.dataset ? el.dataset.track : null;
       var href = el.getAttribute ? el.getAttribute("href") : null;
 

@@ -557,7 +557,7 @@ test("sendBeacon false falls back to fetch keepalive", () => {
   assert.equal(harness.sent.fetches.length, 1);
   assert.equal(harness.sent.fetches[0].endpoint, "https://tracker.example/event");
   assert.equal(harness.sent.fetches[0].init.keepalive, true);
-  assert.equal(harness.sent.fetches[0].init.headers["X-SDK-Version"], "1.2.0");
+  assert.equal(harness.sent.fetches[0].init.headers["X-SDK-Version"], "1.3.0");
   assert.equal(harness.sent.fetches[0].payload.event_name, "page_view");
 });
 
@@ -716,6 +716,62 @@ test("rapid duplicate Meta events within 1500ms are deduped to one beacon", () =
   assert.equal(harness.sent.beacons.length, 1);
   assert.equal(harness.sent.beacons[0].payload.event_name, "AddToCart");
   assert.equal(harness.fbqCalls.length, 1);
+});
+
+test("go to bag button is detected as AddToCart", () => {
+  const harness = createHarness({
+    config: { endpoint: "https://tracker.example/event", siteId: "shop" },
+  });
+  harness.window.PixelScript.setConsent("granted");
+  harness.clearDeliveries();
+
+  const bagBtn = makeElement("button", { innerText: "Go to bag", parentElement: harness.document.body });
+  harness.document.dispatchEvent({ type: "click", target: bagBtn });
+
+  assert.equal(harness.sent.beacons.length, 1);
+  assert.equal(harness.sent.beacons[0].payload.event_name, "AddToCart");
+});
+
+test("go to cart button is detected as AddToCart", () => {
+  const harness = createHarness({
+    config: { endpoint: "https://tracker.example/event", siteId: "shop" },
+  });
+  harness.window.PixelScript.setConsent("granted");
+  harness.clearDeliveries();
+
+  const cartBtn = makeElement("button", { innerText: "Go to cart", parentElement: harness.document.body });
+  harness.document.dispatchEvent({ type: "click", target: cartBtn });
+
+  assert.equal(harness.sent.beacons.length, 1);
+  assert.equal(harness.sent.beacons[0].payload.event_name, "AddToCart");
+});
+
+test("click text that looks like a phone number is suppressed", () => {
+  const harness = createHarness({
+    config: { endpoint: "https://tracker.example/event", siteId: "shop" },
+  });
+  harness.window.PixelScript.setConsent("granted");
+  harness.clearDeliveries();
+
+  const phoneBtn = makeElement("button", { innerText: "919548357723", parentElement: harness.document.body });
+  harness.document.dispatchEvent({ type: "click", target: phoneBtn });
+
+  assert.equal(harness.sent.beacons.length, 1);
+  assert.equal(harness.sent.beacons[0].payload.properties.text, "");
+});
+
+test("click on non-interactive div returns null and is not tracked", () => {
+  const harness = createHarness({
+    config: { endpoint: "https://tracker.example/event", siteId: "shop" },
+  });
+  harness.window.PixelScript.setConsent("granted");
+  harness.clearDeliveries();
+
+  // A plain div with no interactive parent — should not fire any click event
+  const div = makeElement("div", { innerText: "Some section text", parentElement: harness.document.body });
+  harness.document.dispatchEvent({ type: "click", target: div });
+
+  assert.equal(harness.sent.beacons.length, 0);
 });
 
 async function run() {
