@@ -10,10 +10,8 @@ npm start          # production
 npm run dev        # watch mode (Node 18+)
 
 # Run tests
-node test-task4.js                  # server-events.js unit tests
-node tracker/test-task5.js          # Meta CAPI unit tests
-node tracker/test-task6.js          # ClickHouse unit tests (mock) + live if Docker up
-node tracker/test-task7.js          # dual-write integration tests
+node test-pixel.js              # pixel.js unit tests (14 tests)
+node test-tracker-modules.js    # server-events + Meta CAPI + ClickHouse unit tests (9 tests)
 
 # Tracker microservice
 node tracker/server.js
@@ -46,22 +44,31 @@ On parse, `pixel.js` merges `window.PIXEL_CONFIG` into internal config, then cal
 - **Attribution capture**: reads all UTM params + ad-network click IDs (`fbclid`, `gclid`, `ttclid`, `msclkid`, `twclid`, etc.) from the URL on every page load. Stores **first touch** in `localStorage` (permanent) and **last touch** in `sessionStorage` (per visit). Both are attached to every event payload under `attribution.first_touch` / `attribution.last_touch`.
 - **Identity**: anonymous UUID in `localStorage` + first-party cookie fallback (Safari ITP). Session UUID in `sessionStorage` with 30-min inactivity expiry.
 - **Event tracking**: global click delegation, form submit/focus, scroll depth (25/50/75/100%), SPA route changes via `pushState` patch, `visibilitychange`, `beforeunload`.
-- **Meta Standard Events**: `META_STANDARD_EVENTS` map gates whether `data-track` attribute values fire as `fbq("track", ...)` (standard) or `fbq("trackCustom", ...)`. All `data-track` clicks go through `trackMetaEvent()` which fires both the pixel endpoint and `fbq()` simultaneously.
+- **Event routing**: two dispatch functions with different behaviour:
+  - `track(eventName, props)` — internal events only. Sends to endpoint. No fbq call. No Meta CAPI forwarding.
+  - `trackMetaEvent(eventName, props)` — Meta events. Sets `meta_event: true` on the payload, sends to endpoint, and fires `fbq("track", ...)` (standard) or `fbq("trackCustom", ...)` (custom) simultaneously. The tracker forwards these to Meta CAPI.
+- **Page view**: fires as `page_view` (snake_case) via `track()` — endpoint only, no fbq. URL-based auto-detection (`/product/`, `/cart`, etc.) fires an additional `trackMetaEvent` for the matching standard event.
+- **Content detection**: on init, queries `[data-track-content]` element. If found, reads `data-content-name/category/ids/type/value/currency` and fires `trackMetaEvent("ViewContent", props)` automatically.
 - **Delivery**: `navigator.sendBeacon()` primary, `fetch` fallback, `localStorage` offline buffer flushed on `online` event. Consent gate buffers events until `PixelScript.setConsent("granted")`.
 
 ### Layer 2 — Tracker Microservice (`tracker/`)
-Express server on port 3001. Single endpoint `POST /event`. Responds 202 immediately, then fires a `Promise.allSettled` dual-write with no sequential dependency:
+Express server on port 3001. Single endpoint `POST /event`. Responds 202 immediately, then:
 
 ```
 POST /event
   └─ 202 Accepted (immediate)
-  └─ Promise.allSettled([
-       sendToMeta(payload, META_CONFIG),   // tracker/meta.js
-       insertEvent(payload),               // tracker/clickhouse.js
-     ])
+  └─ if payload.meta_event === true:
+       sendToMeta(payload, META_CONFIG)   // tracker/meta.js — await, attach result to payload._meta
+  └─ insertEvent(payload)                 // tracker/clickhouse.js — always runs
 ```
 
-Neither write can block or kill the other.
+The Meta write runs first (awaited) so its result (`success`, `status`, `error`) is available when ClickHouse writes the row. ClickHouse always runs regardless of Meta outcome — events are never lost.
+
+**What goes to Meta CAPI**: only payloads where `meta_event === true`. This flag is set by:
+- `trackMetaEvent()` in `pixel.js` (browser)
+- `track()` in `server-events.js` (server-side)
+
+Internal events (`page_view`, `click`, `scroll_depth`, `form_field_focus`, `outbound_click`) never set the flag and go to ClickHouse only.
 
 **`tracker/meta.js`** — normalizes the internal payload to Meta CAPI format:
 - Maps internal field names to Meta field names (`email → em`, `phone → ph`, etc.)
@@ -69,10 +76,10 @@ Neither write can block or kill the other.
 - `custom_data` block only included when `properties` contains recognized conversion fields
 - `buildMetaEvent()` is pure (no I/O) — tested independently of `sendToMeta()`
 
-**`tracker/clickhouse.js`** — thin HTTP client over ClickHouse's native HTTP interface (port 8123). No npm dependency — uses built-in `fetch`. `toRow()` flattens the nested payload (including `attribution.first_touch.*` → `ft_*` columns). Inserts via `FORMAT JSONEachRow`.
+**`tracker/clickhouse.js`** — thin HTTP client over ClickHouse's native HTTP interface (port 8123). No npm dependency — uses built-in `fetch`. `toRow()` flattens the nested payload (including `attribution.first_touch.*` → `ft_*` columns, `_meta.*` → `meta_success/status/error` columns). Inserts via `FORMAT JSONEachRow`.
 
 ### Server-Side Utility (`server-events.js`)
-Node module for use inside any Express backend. `track(eventName, props, req, userData)` extracts IP/UA/cookies from `req`, hashes PII fields with SHA-256 (using Node `crypto`), then POSTs to the tracker microservice. The `sha256()` export is reused by the tracker for consistency.
+Node module for use inside any Express backend. `track(eventName, props, req, userData)` extracts IP/UA/cookies from `req`, hashes PII fields with SHA-256 (using Node `crypto`), sets `meta_event: true`, then POSTs to the tracker microservice. The `sha256()` export is reused by the tracker for consistency.
 
 ### Root SQLite Server (`server.js` + `db.js`)
 Separate simpler server (port 3001 by default — conflicts with tracker if both run). Stores raw events in SQLite (`events.db`) with per-user sequence numbers. Used for local-only analytics without Meta forwarding. Query endpoints: `GET /users`, `GET /users/:anonId`, `GET /events`, `GET /summary`.
@@ -84,11 +91,12 @@ Every event (client or server) carries this envelope:
 ```js
 {
   event_id,      // UUID — dedup key for Meta CAPI
-  event_name,    // string — Meta Standard Event or custom
+  event_name,    // string — snake_case internal (page_view) or Meta Standard Event (Purchase)
   site_id,
   anon_id,       // UUID — permanent anonymous user ID
   session_id,    // UUID — 30-min session
   source,        // "client" | "server"
+  meta_event,    // true if this event should be forwarded to Meta CAPI, absent otherwise
   page_url, page_path, referrer,
   attribution: {
     first_touch: { utm_source, utm_medium, ..., fbclid, _fbc, ... },
@@ -102,6 +110,26 @@ Every event (client or server) carries this envelope:
   timestamp
 }
 ```
+
+## Custom Events
+
+Use `trackMetaEvent` for any event you want to reach Meta CAPI (standard or custom). Use `track` for internal-only events.
+
+```js
+// Browser — reaches Meta CAPI + fbq("trackCustom", ...)
+PixelScript.trackMetaEvent("WatchedDemo", { plan: "pro" });
+
+// Browser — ClickHouse only
+PixelScript.track("video_buffered", { seconds: 3 });
+
+// HTML attribute — reaches Meta CAPI + fbq("trackCustom", ...)
+// <button data-track="WatchedDemo">Watch Demo</button>
+
+// Server-side — always reaches Meta CAPI
+await track("WatchedDemo", { plan: "pro" }, req, { email: user.email });
+```
+
+No allowlist to maintain — the `meta_event` flag on the payload controls routing end-to-end.
 
 ## Environment Variables (tracker/.env)
 
@@ -172,4 +200,13 @@ Find Pixel ID and Access Token in Meta Events Manager → your pixel → Setting
 
 ## ClickHouse Schema Notes
 
-Table `analytics.events` — partitioned by `toYYYYMM(received_at)`, ordered by `(received_at, event_name, anon_id)`, 13-month TTL. Attribution columns are flattened: `ft_*` = first touch, `lt_*` = last touch. Schema defined in `tracker/init.sql`, auto-applied via Docker `docker-entrypoint-initdb.d`.
+Table `analytics.events` — partitioned by `toYYYYMM(received_at)`, ordered by `(received_at, event_name, anon_id)`, 13-month TTL. Attribution columns are flattened: `ft_*` = first touch, `lt_*` = last touch. `meta_success`, `meta_status`, `meta_error` columns record the Meta CAPI outcome for each event. Schema defined in `tracker/init.sql`, auto-applied via Docker `docker-entrypoint-initdb.d`.
+
+### Querying failed Meta events
+```sql
+SELECT event_id, event_name, meta_error, received_at
+FROM analytics.events
+WHERE meta_event = true
+  AND meta_success != true
+ORDER BY received_at DESC
+```

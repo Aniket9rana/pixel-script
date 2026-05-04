@@ -167,6 +167,7 @@ async function track(eventName, properties = {}, req = null, userData = {}, opti
     event_name:  eventName,
     site_id:     _config.siteId,
     source:      "server",
+    meta_event:  true,
     ip:          reqCtx.ip          ?? null,
     user_agent:  reqCtx.user_agent  ?? null,
     fbp:         reqCtx.fbp         ?? null,

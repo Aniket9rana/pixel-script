@@ -16,6 +16,7 @@ const META_CONFIG = {
   testEventCode:  process.env.META_TEST_EVENT_CODE || null,
 };
 
+
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "50kb" }));
 
@@ -37,32 +38,30 @@ app.post("/event", async (req, res) => {
     received_at: new Date().toISOString(),
   };
 
-  console.log(`[tracker] ${payload.event_name} | source=${payload.source || "client"} | id=${payload.event_id}`);
+  const isMeta = payload.meta_event === true;
+  console.log(`[tracker] ${payload.event_name} | source=${payload.source || "client"} | meta=${isMeta} | id=${payload.event_id}`);
 
-  // ── Dual write — Meta CAPI + ClickHouse in parallel ───────────────────────
-  // Neither write blocks the other. allSettled never throws.
-  const [metaOutcome, chOutcome] = await Promise.allSettled([
-    sendToMeta(payload, META_CONFIG),
-    insertEvent(payload),
-  ]);
-
-  // Meta result
-  if (metaOutcome.status === "fulfilled") {
-    const m = metaOutcome.value;
-    if (m.success) {
-      console.log(`[tracker] Meta OK — events_received=${m.trace_id}`);
-    } else {
-      console.error(`[tracker] Meta failed — ${m.error}`);
+  // ── Meta CAPI (standard events only) ──────────────────────────────────────
+  if (isMeta) {
+    try {
+      const m = await sendToMeta(payload, META_CONFIG);
+      payload._meta = m;
+      if (m.success) {
+        console.log(`[tracker] Meta OK — events_received=${m.trace_id}`);
+      } else {
+        console.error(`[tracker] Meta failed — ${m.error}`);
+      }
+    } catch (err) {
+      console.error(`[tracker] Meta threw — ${err.message}`);
     }
-  } else {
-    console.error(`[tracker] Meta threw — ${metaOutcome.reason}`);
   }
 
-  // ClickHouse result
-  if (chOutcome.status === "fulfilled") {
+  // ── ClickHouse (all events, with meta result attached when available) ──────
+  try {
+    await insertEvent(payload);
     console.log(`[tracker] ClickHouse OK — ${payload.event_name} written`);
-  } else {
-    console.error(`[tracker] ClickHouse failed — ${chOutcome.reason?.message}`);
+  } catch (err) {
+    console.error(`[tracker] ClickHouse failed — ${err.message}`);
   }
 });
 

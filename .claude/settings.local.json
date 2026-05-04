@@ -13,7 +13,10 @@
       "Bash(git branch *)",
       "Bash(git push *)",
       "Bash(git config *)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(git -C /mnt/c/workspace/node/pixel-script log --oneline -5)",
+      "Bash(python3 -c ' *)",
+      "WebFetch(domain:cdn.jsdelivr.net)"
     ]
   }
 }
